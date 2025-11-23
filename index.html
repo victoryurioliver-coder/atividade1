@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Saci Runner - by Victor Oliver</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; touch-action:manipulation; }
+    html, body {
+      height: 100%;
+      background: #111;
+      overflow: hidden;
+      font-family: Arial, Helvetica, sans-serif;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;   /* Centraliza verticalmente */
+      align-items: center;       /* Centraliza horizontalmente */
+      min-height: 100vh;
+      padding: 10px;
+    }
+    canvas {
+      border: 4px solid #333;
+      border-radius: 12px;
+      background: #f0f0f0;
+      image-rendering: pixelated;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      max-width: 95vw;
+      max-height: 85vh;
+      width: auto !important;
+      height: auto !important;
+    }
+    .credits {
+      position: fixed;
+      bottom: 12px;
+      right: 12px;
+      background: rgba(255,255,255,0.9);
+      color: #333;
+      padding: 8px 16px;
+      border-radius: 30px;
+      font-weight: bold;
+      font-size: 15px;
+      z-index: 10;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+    }
+    .mobile-hint {
+      position: fixed;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.85);
+      color: #fff;
+      padding: 12px 30px;
+      border-radius: 50px;
+      font-weight: bold;
+      font-size: 18px;
+      z-index: 100;
+      white-space: nowrap;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+    }
+  </style>
+</head>
+<body>
+
+<div class="mobile-hint">TOQUE = PULAR | DOUBLE TOQUE = ABAIXAR</div>
+<div class="credits">by Victor Oliver</div>
+<canvas id="game"></canvas>
+
+<script>
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+
+  // Tamanho lógico fixo do jogo
+  canvas.width = 800;
+  canvas.height = 200;
+  ctx.imageSmoothingEnabled = false;
+
+  // Responsividade perfeita
+  function resize() {
+    const ratio = canvas.width / canvas.height;
+    const maxW = window.innerWidth * 0.95;
+    const maxH = window.innerHeight * 0.85;
+
+    let newWidth = maxW;
+    let newHeight = newWidth / ratio;
+
+    if (newHeight > maxH) {
+      newHeight = maxH;
+      newWidth = newHeight * ratio;
+    }
+
+    canvas.style.width = newWidth + 'px';
+    canvas.style.height = newHeight + 'px';
+  }
+  window.addEventListener('resize', resize);
+  window.addEventListener('orientationchange', () => setTimeout(resize, 300));
+  resize();
+
+  // ======================
+  // CONSTANTES DO JOGO
+  // ======================
+  const GROUND_Y = 152;
+  const SACI_HEIGHT_NORMAL = 40;
+  const SACI_HEIGHT_DUCK = 28;
+  const SACI_START_Y = GROUND_Y - SACI_HEIGHT_NORMAL;
+  const JUMP_VELOCITY = -17;
+  const GRAVITY = 0.85;
+
+  // ======================
+  // VARIÁVEIS
+  // ======================
+  let gameRunning = false;
+  let score = 0;
+  let hiScore = localStorage.getItem('saciHi') || 0;
+  let speed = 8;
+  let saci = { x: 80, y: SACI_START_Y, vy: 0, jumping: false, ducking: false };
+  let obstacles = [];
+  let groundX = 0;
+  let lastObstacleTime = 0;
+  let nightMode = false;
+
+  // ======================
+  // CONTROLES
+  // ======================
+  let lastTouch = 0;
+  document.addEventListener('touchstart', e => {
+    e.preventDefault();
+    const now = Date.now();
+    if (now - lastTouch < 400) duck();
+    else handleJump();
+    lastTouch = now;
+  }, { passive: false });
+
+  document.addEventListener('click', handleJump);
+  document.addEventListener('keydown', e => {
+    if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); handleJump(); }
+    if (e.code === 'ArrowDown') { e.preventDefault(); duck(); }
+  });
+  document.addEventListener('keyup', e => {
+    if (e.code === 'ArrowDown') saci.ducking = false;
+  });
+
+  function handleJump() { if (!gameRunning) startGame(); else jump(); }
+  function duck() { if (gameRunning && !saci.jumping) saci.ducking = true; }
+
+  // ======================
+  // INICIO DO JOGO
+  // ======================
+  function startGame() {
+    gameRunning = true;
+    score = 0;
+    speed = 8;
+    nightMode = false;
+    saci = { x: 80, y: SACI_START_Y, vy: 0, jumping: false, ducking: false };
+    obstacles = [];
+    groundX = 0;
+    lastObstacleTime = 0;
+    gameLoop();
+  }
+
+  function jump() {
+    if (!saci.jumping && saci.y >= SACI_START_Y) {
+      saci.jumping = true;
+      saci.vy = JUMP_VELOCITY;
+      saci.ducking = false;
+    }
+  }
+
+  // ======================
+  // LOOP PRINCIPAL
+  // ======================
+  function gameLoop() {
+    if (!gameRunning) return;
+    ctx.clearRect(0, 0, 800, 200);
+
+    // Modo noturno
+    if (score >= 1000) nightMode = true;
+    ctx.fillStyle = nightMode ? '#0f0f1e' : '#f0f0f0';
+    ctx.fillRect(0, 0, 800, 200);
+
+    // Aumento progressivo de velocidade
+    speed = Math.min(8 + score * 0.008, 16);
+
+    // Física do Saci
+    if (saci.jumping) {
+      saci.vy += GRAVITY;
+      saci.y += saci.vy;
+      if (saci.y >= SACI_START_Y) {
+        saci.y = SACI_START_Y;
+        saci.jumping = false;
+        saci.vy = 0;
+      }
+    } else if (!saci.ducking) {
+      saci.y = SACI_START_Y;
+    } else {
+      saci.y = GROUND_Y - SACI_HEIGHT_DUCK;
+    }
+
+    // Chão animado
+    groundX -= speed / 2;
+    if (groundX <= -20) groundX = 0;
+    ctx.fillStyle = nightMode ? '#444' : '#aaa';
+    for (let i = groundX; i < 800; i += 20) ctx.fillRect(i, GROUND_Y, 12, 6);
+
+    // Spawn de obstáculos
+    const now = Date.now();
+    const minInterval = 750 + (16 - speed) * 50;
+    if (now - lastObstacleTime > minInterval) {
+      lastObstacleTime = now;
+
+      const isAir = Math.random() < 0.5; // 50% chão / 50% ar
+
+      if (isAir) {
+        // Obstáculos aéreos → tem que abaixar
+        if (Math.random() < 0.4) {
+          // Pássaro (mais alto)
+          obstacles.push({ x: 800, y: 85, w: 34, h: 26, type: 'bird', tall: true });
+        } else {
+          // Cacto alto
+          const types = [{w:24,h:52},{w:50,h:54},{w:34,h:58}];
+          const t = types[Math.floor(Math.random()*types.length)];
+          obstacles.push({ x: 800, y: GROUND_Y - t.h - 38, w: t.w, h: t.h, type: 'cactus', tall: true });
+        }
+      } else {
+        // Obstáculos no chão → tem que pular
+        const types = [{w:18,h:28},{w:22,h:34},{w:40,h:30},{w:30,h:40}];
+        const t = types[Math.floor(Math.random()*types.length)];
+        obstacles.push({ x: 800, y: GROUND_Y - t.h, w: t.w, h: t.h, type: 'cactus', tall: false });
+      }
+    }
+
+    // Atualização e colisão
+    for (let i = obstacles.length - 1; i >= 0; i--) {
+      const o = obstacles[i];
+      o.x -= speed;
+
+      const saciH = saci.ducking ? SACI_HEIGHT_DUCK : SACI_HEIGHT_NORMAL;
+      const saciTop = saci.y;
+      const saciBottom = saci.y + saciH;
+
+      const collides = o.x < 120 && o.x + o.w > 60 &&
+                       saciTop < o.y + o.h &&
+                       saciBottom > o.y;
+
+      // Só morre se bater em obstáculo que exige ação diferente
+      if (collides && !(o.tall && saci.ducking)) {
+        gameOver();
+        return;
+      }
+
+      // Desenho
+      if (o.type === 'cactus') {
+        ctx.fillStyle = nightMode ? '#3d8b3d' : '#58a745';
+        ctx.fillRect(o.x, o.y, o.w, o.h);
+        ctx.fillStyle = nightMode ? '#2d6b2d' : '#4a8a3d';
+        ctx.fillRect(o.x + 4, o.y + 6, 4, 12);
+        if (o.w > 30) ctx.fillRect(o.x + o.w/2 - 2, o.y + 6, 4, 12);
+        ctx.fillRect(o.x + o.w - 8, o.y + 6, 4, 12);
+      } else {
+        // Pássaro com asas batendo
+        const wing = Math.sin(Date.now() * 0.02 * speed) * 4;
+        ctx.fillStyle = nightMode ? '#ccc' : '#555';
+        ctx.fillRect(o.x + 5, o.y + 8 + wing, 24, 8);     // asa
+        ctx.fillRect(o.x, o.y + 5, 28, 14);              // corpo
+        ctx.fillStyle = '#ffcc00';
+        ctx.fillRect(o.x + 26, o.y + 10, 8, 6);          // bico
+      }
+
+      if (o.x < -100) {
+        obstacles.splice(i, 1);
+        score++;
+      }
+    }
+
+    drawSaci();
+
+    // Placar
+    ctx.fillStyle = nightMode ? '#fff' : '#333';
+    ctx.font = 'bold 26px Arial';
+    ctx.textAlign = 'right';
+    ctx.fillText(`Score: ${score}`, 750, 32);
+    ctx.fillText(`HI: ${hiScore}`, 750, 58);
+    ctx.textAlign = 'left';
+
+    requestAnimationFrame(gameLoop);
+  }
+
+  function drawSaci() {
+    const h = saci.ducking ? SACI_HEIGHT_DUCK : SACI_HEIGHT_NORMAL;
+    const hat   = nightMode ? '#c02030' : '#dc3545';
+    const skin  = nightMode ? '#a55f2a' : '#8B4513';
+    const body  = nightMode ? '#eee'    : '#fff';
+    const leg   = nightMode ? '#a55f2a' : '#8B4513';
+
+    // Chapéu vermelho
+    ctx.fillStyle = hat;
+    ctx.fillRect(72, saci.y - 18, 26, 14);
+
+    // Cabeça
+    ctx.fillStyle = skin;
+    ctx.fillRect(82, saci.y - 2, 16, 18);
+
+    // Corpo
+    ctx.fillStyle = body;
+    ctx.fillRect(70, saci.y + 16, 30, h - 16);
+
+    // Perna única (com animação)
+    const bounce = saci.jumping ? 0 : Math.sin(Date.now() * speed * 0.008) * 3;
+    ctx.fillStyle = leg;
+    ctx.fillRect(88, saci.y + h - 10 + bounce, 8, 12);
+    ctx.fillRect(82, saci.y + h + 2, 16, 8);
+
+    // Cachimbo
+    ctx.fillStyle = nightMode ? '#ddd' : '#444';
+    ctx.fillRect(95, saci.y - 5, 12, 4);
+    ctx.fillRect(102, saci.y - 8, 6, 7);
+  }
+
+  // Tela inicial
+  ctx.fillStyle = '#333';
+  ctx.font = 'bold 42px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText('SACI RUNNER', 400, 80);
+  ctx.font = 'bold 22px Arial';
+  ctx.fillText('by Victor Oliver', 400, 115);
+  ctx.font = '20px Arial';
+  ctx.fillText('Pule nos cactos do chão · Abaixe nos aéreos', 400, 150);
+  ctx.fillText('1000 pontos → Modo Noite!', 400, 175);
+
+  function gameOver() {
+    gameRunning = false;
+    if (score > hiScore) {
+      hiScore = score;
+      localStorage.setItem('saciHi', hiScore);
+    }
+    ctx.fillStyle = 'rgba(0,0,0,0.92)';
+    ctx.fillRect(0, 0, 800, 200);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 56px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('GAME OVER', 400, 90);
+    ctx.fillText(`Score: ${score}`, 400, 135);
+    ctx.fillText(`HI ${hiScore}`, 400, 170);
+    ctx.font = '24px Arial';
+    ctx.fillText('Toque para jogar novamente', 400, 195);
+  }
+</script>
+</body>
+</html>
